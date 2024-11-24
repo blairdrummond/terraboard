@@ -2,20 +2,20 @@ package state
 
 import (
 	"bytes"
+	"context"
 	"io/ioutil"
-	"strings"
 	"testing"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/request"
-	"github.com/aws/aws-sdk-go/service/dynamodb"
-	"github.com/aws/aws-sdk-go/service/s3"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	dynatypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/aws-sdk-go/service/s3/s3iface"
 	dynamock "github.com/gusaul/go-dynamock"
 
 	"github.com/camptocamp/terraboard/config"
-	"github.com/sirupsen/logrus"
 )
 
 // TODO: tests for the AWS features of the state package
@@ -60,6 +60,7 @@ func TestNewAWSNoBucket(t *testing.T) {
 	}
 }
 
+/* No longer a good test with aws-sdk-go-v2, since the aws sdk has many ways to detecht creds
 func TestNewAWSNoCredentials(t *testing.T) {
 	// Remove os.Exit call to logrus Fatal
 	logrus.StandardLogger().ExitFunc = func(code int) {}
@@ -91,6 +92,7 @@ func TestNewAWSNoCredentials(t *testing.T) {
 		t.Error("Expected only a single line of log output")
 	}
 }
+*/
 
 func TestNewAWSWithAPPRoleArn(t *testing.T) {
 	awsInstance := NewAWS(
@@ -242,7 +244,7 @@ func TestGetLocks(t *testing.T) {
 	awsInstance.dynamoSvc = dyna
 
 	mock.ExpectScan().Table(awsInstance.dynamoTable).WillReturns(dynamodb.ScanOutput{
-		Items: []map[string]*dynamodb.AttributeValue{
+		Items: []map[string]dynatypes.AttributeValue{
 			{
 				"LockID": {
 					N: aws.String("lock1"),
@@ -277,7 +279,7 @@ type s3Mock struct {
 }
 
 func (s *s3Mock) ListObjectsV2(_ *s3.ListObjectsV2Input) (*s3.ListObjectsV2Output, error) {
-	return &s3.ListObjectsV2Output{Contents: []*s3.Object{
+	return &s3.ListObjectsV2Output{Contents: []s3types.Object{
 		{Key: aws.String("test.tfstate")}, {Key: aws.String("test2.tfstate")}, {Key: aws.String("test3.tfstate")}},
 		IsTruncated: func() *bool { b := false; return &b }(),
 		KeyCount:    func() *int64 { b := int64(3); return &b }(),
@@ -285,13 +287,13 @@ func (s *s3Mock) ListObjectsV2(_ *s3.ListObjectsV2Input) (*s3.ListObjectsV2Outpu
 }
 func (s *s3Mock) ListObjectVersions(_ *s3.ListObjectVersionsInput) (*s3.ListObjectVersionsOutput, error) {
 	return &s3.ListObjectVersionsOutput{
-		Versions: []*s3.ObjectVersion{
+		Versions: []s3types.ObjectVersion{
 			{Key: aws.String("testId"), VersionId: aws.String("test"), LastModified: aws.Time(time.Now())},
 			{Key: aws.String("testId2"), VersionId: aws.String("test2"), LastModified: aws.Time(time.Now())},
 		},
 	}, nil
 }
-func (s *s3Mock) GetObjectWithContext(_ aws.Context, _ *s3.GetObjectInput, _ ...request.Option) (*s3.GetObjectOutput, error) {
+func (s *s3Mock) GetObject(_ context.Context, _ *s3.GetObjectInput) (*s3.GetObjectOutput, error) {
 	return &s3.GetObjectOutput{
 		Body: ioutil.NopCloser(bytes.NewReader([]byte(`{"Version": 4, "Serial": 3, "TerraformVersion": "0.12.0"}`))),
 	}, nil

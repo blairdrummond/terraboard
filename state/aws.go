@@ -7,15 +7,13 @@ import (
 	"strings"
 	"time"
 
-	aws_sdk "github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/credentials"
-	"github.com/aws/aws-sdk-go/aws/credentials/stscreds"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/dynamodb"
-	"github.com/aws/aws-sdk-go/service/dynamodb/dynamodbattribute"
-	"github.com/aws/aws-sdk-go/service/dynamodb/dynamodbiface"
-	"github.com/aws/aws-sdk-go/service/s3"
-	"github.com/aws/aws-sdk-go/service/s3/s3iface"
+	aws_sdk "github.com/aws/aws-sdk-go-v2/aws"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+
+	// "github.com/aws/aws-sdk-go/service/dynamodb/dynamodbattribute"
+	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/camptocamp/terraboard/config"
 	"github.com/camptocamp/terraboard/internal/terraform/states/statefile"
 	log "github.com/sirupsen/logrus"
@@ -23,8 +21,8 @@ import (
 
 // AWS is a state provider type, leveraging S3 and DynamoDB
 type AWS struct {
-	svc           s3iface.S3API
-	dynamoSvc     dynamodbiface.DynamoDBAPI
+	svc           *s3.Client
+	dynamoSvc     *dynamodb.Client
 	bucket        string
 	dynamoTable   string
 	keyPrefix     string
@@ -39,38 +37,19 @@ func NewAWS(aws config.AWSConfig, bucket config.S3BucketConfig, noLocks, noVersi
 		return nil
 	}
 
-	sess := session.Must(session.NewSession())
-	awsConfig := aws_sdk.NewConfig()
-	var creds *credentials.Credentials
-	if len(aws.APPRoleArn) > 0 {
-		log.Debugf("Using %s role", aws.APPRoleArn)
-		creds = stscreds.NewCredentials(sess, aws.APPRoleArn, func(p *stscreds.AssumeRoleProvider) {
-			if aws.ExternalID != "" {
-				p.ExternalID = aws_sdk.String(aws.ExternalID)
-			}
-		})
-	} else {
-		if aws.AccessKey == "" || aws.SecretAccessKey == "" {
-			log.Fatal("Missing AccessKey or SecretAccessKey for AWS provider. Please check your configuration and retry")
-		}
-		creds = credentials.NewStaticCredentials(aws.AccessKey, aws.SecretAccessKey, aws.SessionToken)
+	awsConfig, err := awsconfig.LoadDefaultConfig(context.TODO())
+	if err != nil {
+		log.Fatalf("unable to load SDK config, %v", err)
 	}
-	awsConfig.WithCredentials(creds)
 
-	if e := aws.Endpoint; e != "" {
-		awsConfig.WithEndpoint(e)
-	}
-	if e := aws.Region; e != "" {
-		awsConfig.WithRegion(e)
-	}
-	awsConfig.S3ForcePathStyle = &bucket.ForcePathStyle
+	// awsConfig.S3ForcePathStyle = &bucket.ForcePathStyle
 
 	return &AWS{
-		svc:           s3.New(sess, awsConfig),
+		svc:           s3.NewFromConfig(awsConfig),
 		bucket:        bucket.Bucket,
 		keyPrefix:     bucket.KeyPrefix,
 		fileExtension: bucket.FileExtension,
-		dynamoSvc:     dynamodbiface.DynamoDBAPI(dynamodb.New(sess, awsConfig)),
+		dynamoSvc:     dynamodb.NewFromConfig(awsConfig),
 		dynamoTable:   aws.DynamoDBTable,
 		noLocks:       noLocks,
 		noVersioning:  noVersioning,
@@ -103,7 +82,7 @@ func (a *AWS) GetLocks() (locks map[string]LockInfo, err error) {
 		return
 	}
 
-	results, err := a.dynamoSvc.Scan(&dynamodb.ScanInput{
+	results, err := a.dynamoSvc.Scan(context.TODO(), &dynamodb.ScanInput{
 		TableName: &a.dynamoTable,
 	})
 	if err != nil {
@@ -111,7 +90,7 @@ func (a *AWS) GetLocks() (locks map[string]LockInfo, err error) {
 	}
 
 	var lockList []Lock
-	err = dynamodbattribute.UnmarshalListOfMaps(results.Items, &lockList)
+	err = attributevalue.UnmarshalListOfMaps(results.Items, &lockList)
 	if err != nil {
 		return locks, err
 	}
@@ -147,7 +126,7 @@ func (a *AWS) GetStates() (states []string, err error) {
 		Prefix: &a.keyPrefix,
 	}
 	for truncatedListing {
-		result, err := a.svc.ListObjectsV2(&params)
+		result, err := a.svc.ListObjectsV2(context.TODO(), &params)
 		if err != nil {
 			return states, err
 		}
@@ -184,7 +163,8 @@ func (a *AWS) GetState(st, versionID string) (sf *statefile.File, err error) {
 	if versionID != "" && !a.noVersioning {
 		input.VersionId = &versionID
 	}
-	result, err := a.svc.GetObjectWithContext(context.Background(), input)
+
+	result, err := a.svc.GetObject(context.Background(), input)
 	if err != nil {
 		log.WithFields(log.Fields{
 			"path":       st,
@@ -201,7 +181,7 @@ func (a *AWS) GetState(st, versionID string) (sf *statefile.File, err error) {
 
 	sf, err = statefile.Read(result.Body)
 	if sf == nil || err != nil {
-		return sf, fmt.Errorf("Failed to find state: %v", err)
+		return sf, fmt.Errorf("failed to find state: %v", err)
 	}
 
 	return
@@ -218,7 +198,7 @@ func (a *AWS) GetVersions(state string) (versions []Version, err error) {
 		return
 	}
 
-	result, err := a.svc.ListObjectVersions(&s3.ListObjectVersionsInput{
+	result, err := a.svc.ListObjectVersions(context.TODO(), &s3.ListObjectVersionsInput{
 		Bucket: aws_sdk.String(a.bucket),
 		Prefix: aws_sdk.String(state),
 	})
