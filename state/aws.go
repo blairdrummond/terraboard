@@ -42,6 +42,7 @@ func NewAWS(aws config.AWSConfig, bucket config.S3BucketConfig, noLocks, noVersi
 		log.Fatalf("unable to load SDK config, %v", err)
 	}
 
+
 	// awsConfig.S3ForcePathStyle = &bucket.ForcePathStyle
 
 	return &AWS{
