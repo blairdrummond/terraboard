@@ -16,7 +16,6 @@ import (
 )
 
 // TODO: tests for the AWS features of the state package
-
 func TestNewAWS(t *testing.T) {
 	awsInstance := NewAWS(
 		config.AWSConfig{
